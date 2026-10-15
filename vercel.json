@@ -4,11 +4,17 @@
   "routes": [
     {
       "src": "/static/(.*)",
-      "dest": "/static/$1"
+      "dest": "/static/$1",
+      "headers": {
+        "cache-control": "no-cache, no-store, must-revalidate"
+      }
     },
     {
-      "src": "/",
-      "dest": "/static/index.html"
+      "src": "/(index\\.html)?",
+      "dest": "/static/index.html",
+      "headers": {
+        "cache-control": "no-cache, no-store, must-revalidate"
+      }
     },
     {
       "src": "/(.*)",

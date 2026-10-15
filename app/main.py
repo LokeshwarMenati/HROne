@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from bson import json_util
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Path, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -127,18 +128,7 @@ class MockCollection:
         filt = filt or {}
         return sum(1 for d in self.docs if doc_matches(d, filt))
 
-    def find_one(self, filt: dict = None, projection=None):
-        filt = filt or {}
-        for d in self.docs:
-            if doc_matches(d, filt):
-                res = d.copy()
-                if projection and isinstance(projection, dict):
-                    if 1 in projection.values():
-                        res = {k: res[k] for k in projection if k in res}
-                return res
-        return None
-
-    def find(self, filt: dict = None, projection=None):
+    def find_one(self, filt: dict = None, projection=None, sort=None, **kwargs):
         filt = filt or {}
         matched = []
         for d in self.docs:
@@ -148,7 +138,32 @@ class MockCollection:
                     if 1 in projection.values():
                         item = {k: item[k] for k in projection if k in item}
                 matched.append(item)
-        return MockCursor(matched)
+        if not matched:
+            return None
+        if sort:
+            cur = MockCursor(matched)
+            cur.sort(sort)
+            return cur.docs[0]
+        return matched[0]
+
+    def find(self, filt: dict = None, projection=None, sort=None, skip=None, limit=None, **kwargs):
+        filt = filt or {}
+        matched = []
+        for d in self.docs:
+            if doc_matches(d, filt):
+                item = d.copy()
+                if projection and isinstance(projection, dict):
+                    if 1 in projection.values():
+                        item = {k: item[k] for k in projection if k in item}
+                matched.append(item)
+        cur = MockCursor(matched)
+        if sort:
+            cur.sort(sort)
+        if skip:
+            cur.skip(skip)
+        if limit:
+            cur.limit(limit)
+        return cur
 
     def insert_one(self, doc: dict):
         from bson import ObjectId
@@ -696,6 +711,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.middleware("http")
 async def rbac_persona_middleware(request: Request, call_next):
@@ -706,6 +728,19 @@ async def rbac_persona_middleware(request: Request, call_next):
         CURRENT_SESSION.update(PERSONA_PROFILES[header_role])
     response = await call_next(request)
     return response
+
+# Serve static assets and index fallback directly from FastAPI
+static_abs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
+if os.path.exists(static_abs_dir):
+    app.mount("/static", StaticFiles(directory=static_abs_dir), name="static")
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+def serve_index_html():
+    index_file = os.path.join(static_abs_dir, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    return {"message": "HROne Enterprise HRMS Platform"}
 
 
 # --------------------------------------------------------------------------- #

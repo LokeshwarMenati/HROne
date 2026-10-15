@@ -4,6 +4,16 @@ HROne is an enterprise-grade Human Resource Management System built with **FastA
 
 ---
 
+## Live Deployment (Vercel)
+- **Live Production Portal:** [https://hrone-weld.vercel.app/](https://hrone-weld.vercel.app/)
+- **Interactive OpenAPI Docs (Swagger UI):** [https://hrone-weld.vercel.app/docs](https://hrone-weld.vercel.app/docs)
+- **System Health Endpoint:** [https://hrone-weld.vercel.app/health](https://hrone-weld.vercel.app/health)
+
+> **Note on Cloud Database:** For full live database interactivity in Vercel, set `MONGO_URI` (MongoDB Atlas connection string) in your Vercel Project Environment Variables.
+
+
+---
+
 ## 1. Quick Start
 
 ### Prerequisites

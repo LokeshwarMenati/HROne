@@ -25,3 +25,5 @@ docker-compose.override.yml
 
 # Redundant kits
 candidate_kit/
+
+.vercel

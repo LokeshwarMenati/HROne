@@ -25,6 +25,26 @@ const API = {
     }, 4000);
   },
 
+  _dbWarningShown: false,
+
+  showDbBanner() {
+    const banner = document.getElementById('db-status-banner');
+    if (banner && !banner.hasChildNodes()) {
+      banner.innerHTML = `
+        <div style="margin: 1rem 2rem 0; padding: 0.9rem 1.25rem; border-radius: 8px; background: rgba(234, 179, 8, 0.12); border: 1px solid rgba(234, 179, 8, 0.35); color: var(--text-color); font-size: 0.875rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; box-shadow: var(--shadow-sm);">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 1.3rem;">☁️</span>
+            <div>
+              <strong>Cloud Database (MongoDB Atlas) Required:</strong>
+              The Vercel Serverless environment needs a cloud database. Add your <code>MONGO_URI</code> environment variable in Vercel Project Settings to enable live database persistence.
+            </div>
+          </div>
+          <a href="https://vercel.com/dashboard" target="_blank" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Vercel Settings ↗</a>
+        </div>
+      `;
+    }
+  },
+
   async request(url, options = {}) {
     try {
       const res = await fetch(url, {
@@ -43,16 +63,28 @@ const API = {
             if (Array.isArray(errData.detail)) {
               errMsg = errData.detail.map(d => `${d.loc ? d.loc.join('.') : ''}: ${d.msg}`).join(', ');
             } else {
-              errMsg = errData.detail;
+              errMsg = typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail);
             }
           }
         } catch (_) {}
+
+        if (errMsg.includes('Connection refused') || errMsg.includes('localhost:27017') || errMsg.includes('Database unavailable') || res.status === 503) {
+          this.showDbBanner();
+          if (!this._dbWarningShown) {
+            this._dbWarningShown = true;
+            this.toast('Cloud database not connected. Please set MONGO_URI in Vercel.', 'warning');
+          }
+        } else {
+          this.toast(errMsg, 'danger');
+        }
         throw new Error(errMsg);
       }
 
       return await res.json();
     } catch (err) {
-      this.toast(err.message, 'danger');
+      if (!err.message.includes('Connection refused') && !err.message.includes('localhost:27017') && !err.message.includes('Database unavailable')) {
+        this.toast(err.message, 'danger');
+      }
       throw err;
     }
   },

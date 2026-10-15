@@ -370,12 +370,17 @@ class DatabaseWrapper:
         self._real_db = real_db
         self._client = mongo_client
         self._memory_db = None
+        self._is_connected = None
 
     def _is_real_connected(self) -> bool:
+        if self._is_connected is not None:
+            return self._is_connected
         try:
-            self._client.admin.command("ping")
+            self._client.admin.command("ping", maxTimeMS=500)
+            self._is_connected = True
             return True
         except Exception:
+            self._is_connected = False
             return False
 
     def get_db(self):
@@ -384,6 +389,7 @@ class DatabaseWrapper:
         if self._memory_db is None:
             self._memory_db = MockDatabase()
         return self._memory_db
+
 
     def __getattr__(self, name):
         target = self.get_db()
@@ -402,6 +408,8 @@ db = DatabaseWrapper(client[MONGO_DB], client)
 def init_db_indexes():
     """Create all required unique and compound indexes idempotently at startup."""
     try:
+        if not db._is_real_connected():
+            return
         # employees indexes
         db.employees.create_index([("emp_code", ASCENDING)], unique=True, name="idx_emp_code_unique")
         db.employees.create_index([("department", ASCENDING), ("joined_on", ASCENDING)], name="idx_emp_dept_joined")

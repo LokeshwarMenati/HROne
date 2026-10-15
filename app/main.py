@@ -50,9 +50,9 @@ class MockCursor:
     def sort(self, key_or_list, direction=1):
         if isinstance(key_or_list, list):
             for k, d in reversed(key_or_list):
-                self.docs.sort(key=lambda x: str(x.get(k, "")), reverse=(d == -1))
+                self.docs.sort(key=lambda x: str(x.get(k, "")), reverse=(d == -1 or d == "desc"))
         else:
-            self.docs.sort(key=lambda x: str(x.get(key_or_list, "")), reverse=(direction == -1))
+            self.docs.sort(key=lambda x: str(x.get(key_or_list, "")), reverse=(direction == -1 or direction == "desc"))
         return self
 
     def skip(self, n):
@@ -83,6 +83,10 @@ def doc_matches(doc: dict, filt: dict) -> bool:
                 return False
             continue
         doc_val = doc.get(k)
+        if k == "_id" and not isinstance(v, dict):
+            if str(doc_val) != str(v):
+                return False
+            continue
         if isinstance(v, dict):
             for op, target in v.items():
                 if op == "$eq" and doc_val != target:
@@ -101,6 +105,10 @@ def doc_matches(doc: dict, filt: dict) -> bool:
                     return False
                 elif op == "$nin" and doc_val in target:
                     return False
+                elif op == "$regex":
+                    opts = re.IGNORECASE if v.get("$options") == "i" else 0
+                    if not (doc_val and re.search(str(target), str(doc_val), opts)):
+                        return False
         elif doc_val != v:
             return False
     return True
@@ -143,6 +151,7 @@ class MockCollection:
         return MockCursor(matched)
 
     def insert_one(self, doc: dict):
+        from bson import ObjectId
         d = doc.copy()
         if self.name == "employees":
             if any(x.get("emp_code") == d.get("emp_code") for x in self.docs):
@@ -151,7 +160,7 @@ class MockCollection:
             if any(x.get("emp_code") == d.get("emp_code") and x.get("date") == d.get("date") for x in self.docs):
                 raise DuplicateKeyError(f"E11000 duplicate key error: {d.get('emp_code')} {d.get('date')}")
         if "_id" not in d:
-            d["_id"] = str(len(self.docs) + 1)
+            d["_id"] = str(ObjectId())
         self.docs.append(d)
         class InsertResult:
             inserted_id = d["_id"]
@@ -185,9 +194,53 @@ class MockCollection:
             new_doc = filt.copy()
             if "$set" in update:
                 new_doc.update(update["$set"])
-            self.insert_one(new_doc)
-            res.upserted_id = new_doc.get("_id")
+            ins = self.insert_one(new_doc)
+            res.upserted_id = ins.inserted_id
         return res
+
+    def update_many(self, filt: dict, update: dict):
+        modified = 0
+        for d in self.docs:
+            if doc_matches(d, filt):
+                if "$set" in update:
+                    d.update(update["$set"])
+                modified += 1
+        class ManyResult:
+            modified_count = modified
+        return ManyResult()
+
+    def find_one_and_update(self, filt: dict, update: dict, return_document=True, upsert: bool = False, **kwargs):
+        filt = filt or {}
+        for d in self.docs:
+            if doc_matches(d, filt):
+                old_copy = d.copy()
+                if "$set" in update:
+                    d.update(update["$set"])
+                if "$push" in update:
+                    for pk, pv in update["$push"].items():
+                        if pk not in d or not isinstance(d[pk], list):
+                            d[pk] = []
+                        d[pk].append(pv)
+                return d.copy() if return_document else old_copy
+        if upsert:
+            new_doc = filt.copy()
+            if "$set" in update:
+                new_doc.update(update["$set"])
+            self.insert_one(new_doc)
+            return new_doc.copy()
+        return None
+
+    def delete_one(self, filt: dict = None):
+        filt = filt or {}
+        deleted = 0
+        for idx, d in enumerate(self.docs):
+            if doc_matches(d, filt):
+                del self.docs[idx]
+                deleted = 1
+                break
+        class DeleteOneResult:
+            deleted_count = deleted
+        return DeleteOneResult()
 
     def delete_many(self, filt: dict = None):
         filt = filt or {}
@@ -198,82 +251,65 @@ class MockCollection:
         return DeleteResult()
 
     def aggregate(self, pipeline: list):
-        # 1. Single Employee Monthly Analytics
-        if self.name == "attendance_logs" and pipeline and "$match" in pipeline[0]:
-            match_stage = pipeline[0]["$match"]
-            emp_code = match_stage.get("emp_code")
-            date_cond = match_stage.get("date", {})
-            start_date = date_cond.get("$gte", "")
-            end_date = date_cond.get("$lte", "")
-            matched = [
-                d for d in self.docs
-                if (not emp_code or d.get("emp_code") == emp_code)
-                and (not start_date or d.get("date", "") >= start_date)
-                and (not end_date or d.get("date", "") <= end_date)
-            ]
-            present_days = 0.0
-            leave_days = 0
-            late_count = 0
-            total_late = 0
-            total_ot = 0
-            for d in matched:
-                status = d.get("status")
-                try:
-                    dt = datetime.strptime(d.get("date"), "%Y-%m-%d")
-                    is_weekday = dt.weekday() < 5
-                except Exception:
-                    is_weekday = True
-                if status in ["PRESENT", "WFH", "ON_DUTY"] and is_weekday:
-                    present_days += 0.5 if d.get("half_day") else 1.0
-                elif status == "LEAVE":
-                    leave_days += 1
-                late = d.get("late_minutes", 0) or 0
-                if late > 0:
-                    late_count += 1
-                    total_late += late
-                ot = d.get("overtime_minutes", 0) or 0
-                if ot > 0:
-                    total_ot += ot
-            return [{
-                "_id": None,
-                "present_days": present_days,
-                "leave_days": leave_days,
-                "late_count": late_count,
-                "total_late_minutes": total_late,
-                "total_overtime_minutes": total_ot
-            }]
+        pipe_str = str(pipeline)
 
-        # 2. Department Monthly Summary
-        if self.name == "employees" and pipeline and "$lookup" in str(pipeline):
-            dept_map = {}
-            for e in self.docs:
-                dname = e.get("department", "Engineering")
-                dept_map[dname] = dept_map.get(dname, 0) + 1
-            
-            results = []
-            for dname, count in sorted(dept_map.items()):
-                results.append({
-                    "department": dname,
-                    "headcount": count,
-                    "present_days": float(count * 18),
-                    "absent_days": 1,
-                    "late_count": 2,
-                    "overtime_minutes": 120,
-                    "attendance_rate": 0.9450
+        # 1. Department Trend: Densify calendar day series
+        if self.name == "attendance_logs" and "$densify" in pipe_str:
+            from_d = date(2026, 7, 1)
+            to_d = date(2026, 7, 15)
+            for stage in pipeline:
+                if isinstance(stage, dict) and "$match" in stage and "date" in stage["$match"]:
+                    d_cond = stage["$match"]["date"]
+                    if isinstance(d_cond, dict):
+                        if "$gte" in d_cond:
+                            try:
+                                from_d = date.fromisoformat(d_cond["$gte"])
+                            except Exception:
+                                pass
+                        if "$lte" in d_cond:
+                            try:
+                                to_d = date.fromisoformat(d_cond["$lte"])
+                            except Exception:
+                                pass
+            days = []
+            curr = from_d
+            while curr <= to_d:
+                d_str = curr.isoformat()
+                dow = ((curr.weekday() + 1) % 7) + 1  # MongoDB dow: 1=Sun, 2=Mon ... 7=Sat
+                days.append({
+                    "date": d_str,
+                    "dow": dow
                 })
-            return results
+                curr += timedelta(days=1)
+            return days
+
+        # 2. Department Trend: Log pipeline pre-aggregation
+        if self.name == "attendance_logs" and ("is_present" in pipe_str or "'_id': '$date'" in pipe_str):
+            date_stats = {}
+            for d in self.docs:
+                d_date = d.get("date")
+                if not d_date:
+                    continue
+                if d_date not in date_stats:
+                    date_stats[d_date] = {"_id": d_date, "present_count": 0.0, "late_count": 0}
+                st = d.get("status")
+                if st in ["PRESENT", "WFH", "ON_DUTY"]:
+                    date_stats[d_date]["present_count"] += 0.5 if d.get("half_day") else 1.0
+                if (d.get("late_minutes") or 0) > 0:
+                    date_stats[d_date]["late_count"] += 1
+            return list(date_stats.values())
 
         # 3. Late Leaderboard
-        if self.name == "attendance_logs" and pipeline and "$setWindowFields" in str(pipeline):
+        if self.name == "attendance_logs" and ("$setWindowFields" in pipe_str or "$unwind" in pipe_str or "total_late_minutes" in pipe_str):
             late_map = {}
             for d in self.docs:
                 code = d.get("emp_code")
                 late = d.get("late_minutes", 0) or 0
                 if late > 0:
                     if code not in late_map:
-                        late_map[code] = {"total_late_minutes": 0, "late_records_count": 0}
+                        late_map[code] = {"total_late_minutes": 0, "late_count": 0}
                     late_map[code]["total_late_minutes"] += late
-                    late_map[code]["late_records_count"] += 1
+                    late_map[code]["late_count"] += 1
             
             sorted_entries = sorted(late_map.items(), key=lambda x: (-x[1]["total_late_minutes"], x[0]))
             leaderboard = []
@@ -297,32 +333,120 @@ class MockCollection:
                     "name": name,
                     "department": dept,
                     "total_late_minutes": val,
-                    "late_records_count": stats["late_records_count"]
+                    "late_count": stats["late_count"]
                 })
             return leaderboard
 
-        # 4. Department Trend
-        if self.name == "attendance_logs" and pipeline and "$densify" in str(pipeline):
-            days = []
-            base_date = date(2026, 7, 1)
-            for i in range(14):
-                d = base_date + timedelta(days=i)
-                d_str = d.isoformat()
-                present = 4 if d.weekday() < 5 else 0
-                days.append({
-                    "date": d_str,
-                    "present_count": present,
-                    "moving_average_7d": round(float(present), 2)
+        # 4. Department Monthly Summary
+        if self.name == "employees" and ("$lookup" in pipe_str or "present_days" in pipe_str):
+            dept_map = {}
+            for e in self.docs:
+                dname = e.get("department", "Engineering")
+                dept_map[dname] = dept_map.get(dname, 0) + 1
+            
+            att_docs = []
+            if self.parent_db:
+                att_docs = getattr(self.parent_db.attendance_logs, "docs", [])
+
+            results = []
+            for dname, count in sorted(dept_map.items()):
+                dept_emps = {e.get("emp_code") for e in self.docs if e.get("department") == dname}
+                present_days = 0.0
+                late_count = 0
+                total_late = 0
+                leave_count = 0
+                on_duty_count = 0
+                work_hours = []
+
+                for log in att_docs:
+                    if log.get("emp_code") in dept_emps:
+                        st = log.get("status")
+                        if st in ["PRESENT", "WFH"]:
+                            present_days += 0.5 if log.get("half_day") else 1.0
+                        elif st == "ON_DUTY":
+                            on_duty_count += 1
+                            present_days += 1.0
+                        elif st == "LEAVE":
+                            leave_count += 1
+                        late = log.get("late_minutes", 0) or 0
+                        if late > 0:
+                            late_count += 1
+                            total_late += late
+                        if log.get("work_hours") is not None:
+                            work_hours.append(float(log.get("work_hours")))
+
+                if present_days == 0.0:
+                    present_days = float(count * 18)
+                    work_hours = [8.5, 8.0, 9.0]
+
+                results.append({
+                    "_id": dname,
+                    "headcount": count,
+                    "present_days": present_days,
+                    "late_count": late_count,
+                    "total_late_minutes": total_late,
+                    "leave_count": leave_count,
+                    "on_duty_count": on_duty_count,
+                    "all_work_hours": [work_hours] if work_hours else []
                 })
-            return days
+            return results
+
+        # 5. Single Employee Monthly Analytics
+        if self.name == "attendance_logs" and pipeline and "$match" in pipeline[0]:
+            match_stage = pipeline[0]["$match"]
+            emp_code = match_stage.get("emp_code")
+            date_cond = match_stage.get("date", {})
+            start_date = date_cond.get("$gte", "") if isinstance(date_cond, dict) else ""
+            end_date = date_cond.get("$lte", "") if isinstance(date_cond, dict) else ""
+            matched = [
+                d for d in self.docs
+                if (not emp_code or d.get("emp_code") == emp_code)
+                and (not start_date or d.get("date", "") >= start_date)
+                and (not end_date or d.get("date", "") <= end_date)
+            ]
+            present_days = 0.0
+            leave_days = 0
+            late_count = 0
+            total_late = 0
+            total_ot = 0
+            for d in matched:
+                st = d.get("status")
+                try:
+                    dt = datetime.strptime(d.get("date"), "%Y-%m-%d")
+                    is_weekday = dt.weekday() < 5
+                except Exception:
+                    is_weekday = True
+                if st in ["PRESENT", "WFH", "ON_DUTY"] and is_weekday:
+                    present_days += 0.5 if d.get("half_day") else 1.0
+                elif st == "LEAVE":
+                    leave_days += 1
+                late = d.get("late_minutes", 0) or 0
+                if late > 0:
+                    late_count += 1
+                    total_late += late
+                ot = d.get("overtime_minutes", 0) or 0
+                if ot > 0:
+                    total_ot += ot
+            return [{
+                "_id": None,
+                "present_days": present_days,
+                "leave_days": leave_days,
+                "late_count": late_count,
+                "total_late_minutes": total_late,
+                "total_overtime_minutes": total_ot
+            }]
 
         return []
 
 
 class MockDatabase:
     def __init__(self):
+        self.name = MONGO_DB
         self._collections = {}
         self._seed_sample_data()
+
+    def list_collection_names(self):
+        return list(self._collections.keys())
 
     def _seed_sample_data(self):
         import pathlib
@@ -335,8 +459,130 @@ class MockDatabase:
                     docs = json_util.loads(json_file.read_text(encoding="utf-8"), json_options=opts)
                     col = self[name]
                     col.docs = docs
-                except Exception as e:
+                except Exception:
                     pass
+
+        # Populate all enterprise multi-role collections for cloud preview demo
+        self._seed_enterprise_defaults()
+
+    def _seed_enterprise_defaults(self):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        
+        # 1. Employees (if empty)
+        if self["employees"].count_documents({}) == 0:
+            sample_emps = [
+                {"emp_code": "EMP0001", "name": "Asha Rao", "email": "asha@example.com", "department": "Engineering", "designation": "VP of People Operations", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-01-05", "manager_id": "EMP0004", "salary": 250000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0002", "name": "Bikram Roy", "email": "bikram@example.com", "department": "Sales", "designation": "Senior Account Executive", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-01-05", "manager_id": "EMP0004", "salary": 130000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0003", "name": "Chitra Sen", "email": "chitra@example.com", "department": "Finance", "designation": "Head of Payroll & Compliance", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-02-01", "manager_id": "EMP0004", "salary": 160000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0004", "name": "David Miller", "email": "david@example.com", "department": "Engineering", "designation": "Director of Engineering", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-03-10", "manager_id": None, "salary": 280000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0005", "name": "Evelyn Reed", "email": "evelyn@example.com", "department": "Operations", "designation": "IT Infrastructure Lead", "shift_start": "22:00", "shift_end": "06:00", "joined_on": "2026-01-15", "manager_id": "EMP0004", "salary": 120000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0006", "name": "Farhan Ali", "email": "farhan@example.com", "department": "Human Resources", "designation": "Lead Talent Acquisition", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-04-01", "manager_id": "EMP0001", "salary": 140000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0007", "name": "Geeta Sharma", "email": "geeta@example.com", "department": "Product Management", "designation": "Chief Compliance Officer", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-05-01", "manager_id": "EMP0001", "salary": 240000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0008", "name": "Harish Verma", "email": "harish@example.com", "department": "Sales", "designation": "Enterprise Account Manager", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-06-15", "manager_id": "EMP0004", "salary": 110000.0, "probation_status": "CONFIRMED", "location": "London, UK"}
+            ]
+            self["employees"].insert_many(sample_emps)
+
+        # 2. Jobs
+        if self["jobs"].count_documents({}) == 0:
+            self["jobs"].insert_many([
+                {"title": "Staff Cloud Architect", "department": "Engineering", "location": "Bengaluru, India", "openings": 2, "type": "Full-time", "experience": "8+ years", "status": "OPEN", "created_at": now_iso},
+                {"title": "Enterprise Account Executive", "department": "Sales", "location": "London, UK", "openings": 3, "type": "Full-time", "experience": "5+ years", "status": "OPEN", "created_at": now_iso},
+                {"title": "Senior Compensation Analyst", "department": "Human Resources", "location": "Bengaluru, India", "openings": 1, "type": "Full-time", "experience": "4-6 years", "status": "OPEN", "created_at": now_iso},
+                {"title": "DevOps / Reliability Engineer", "department": "Engineering", "location": "New York, USA", "openings": 2, "type": "Full-time", "experience": "5+ years", "status": "OPEN", "created_at": now_iso}
+            ])
+
+        # 3. Assets
+        if self["assets"].count_documents({}) == 0:
+            self["assets"].insert_many([
+                {"asset_tag": "AST-1001", "category": "LAPTOP", "model": "MacBook Pro 16 M3 Max", "serial_no": "C02G3044MD6R", "status": "ASSIGNED", "assigned_to": "EMP0001", "assigned_date": "2026-01-05"},
+                {"asset_tag": "AST-1002", "category": "LAPTOP", "model": "Lenovo ThinkPad X1 Carbon", "serial_no": "PF3B9941", "status": "ASSIGNED", "assigned_to": "EMP0002", "assigned_date": "2026-01-05"},
+                {"asset_tag": "AST-1003", "category": "MONITOR", "model": "Dell UltraSharp 32 4K", "serial_no": "CN093410", "status": "ASSIGNED", "assigned_to": "EMP0001", "assigned_date": "2026-01-06"},
+                {"asset_tag": "AST-1004", "category": "LAPTOP", "model": "MacBook Air 15 M3", "serial_no": "C02H1022MD8T", "status": "AVAILABLE", "assigned_to": None, "assigned_date": None},
+                {"asset_tag": "AST-1005", "category": "WORKSTATION", "model": "Dell Precision 5820 Tower", "serial_no": "DL5820W01", "status": "AVAILABLE", "assigned_to": None, "assigned_date": None}
+            ])
+
+        # 4. Tickets
+        if self["tickets"].count_documents({}) == 0:
+            self["tickets"].insert_many([
+                {"ticket_no": "TICK-0001", "emp_code": "EMP0002", "category": "Payroll", "priority": "HIGH", "subject": "Discrepancy in HRA allowance for July", "description": "HRA deduction appears slightly higher than previous cycle.", "status": "IN_PROGRESS", "created_at": now_iso, "resolution": None},
+                {"ticket_no": "TICK-0002", "emp_code": "EMP0004", "category": "IT Support", "priority": "MEDIUM", "subject": "Request for external monitor adapter", "description": "Need USB-C to DisplayPort cable for workstation setup.", "status": "RESOLVED", "created_at": now_iso, "resolution": "Provided via IT desk on 2nd floor."}
+            ])
+
+        # 5. Goals
+        if self["goals"].count_documents({}) == 0:
+            self["goals"].insert_many([
+                {"emp_code": "EMP0001", "title": "Deliver Enterprise Attendance Engine v2.0", "category": "Architecture", "due_date": "2026-07-31", "target_metric": "Zero test regressions, 100k scale", "progress": 85, "status": "IN_PROGRESS", "created_at": now_iso},
+                {"emp_code": "EMP0001", "title": "Achieve MongoDB Query Indexing Optimization", "category": "Performance", "due_date": "2026-07-25", "target_metric": "All explain plans using IXSCAN", "progress": 100, "status": "COMPLETED", "created_at": now_iso},
+                {"emp_code": "EMP0002", "title": "Close Q3 Enterprise Pipeline Deals ($400k ARR)", "category": "Sales", "due_date": "2026-09-30", "target_metric": "Signed MSAs with 3 Fortune 500 accounts", "progress": 60, "status": "IN_PROGRESS", "created_at": now_iso},
+                {"emp_code": "EMP0004", "title": "Maintain 99.99% Core Service Availability", "category": "Engineering SLA", "due_date": "2026-12-31", "target_metric": "Zero unplanned P1 outages", "progress": 95, "status": "IN_PROGRESS", "created_at": now_iso}
+            ])
+
+        # 6. Payroll Periods
+        if self["payroll_periods"].count_documents({}) == 0:
+            self["payroll_periods"].insert_many([
+                {"month": "2026-07", "total_gross": 950000.0, "total_net": 795000.0, "employees_count": 8, "status": "COMPLETED", "processed_on": "2026-07-28"},
+                {"month": "2026-06", "total_gross": 920000.0, "total_net": 772000.0, "employees_count": 8, "status": "COMPLETED", "processed_on": "2026-06-28"}
+            ])
+
+        # 7. Leaves
+        if self["leaves"].count_documents({}) == 0:
+            self["leaves"].insert_many([
+                {"id": "LEV-001", "emp_code": "EMP0002", "name": "Bikram Roy", "leave_type": "Casual Leave", "start_date": "2026-07-22", "end_date": "2026-07-23", "days": 2, "reason": "Family wedding obligation in Jaipur", "status": "PENDING", "applied_on": "2026-07-14"},
+                {"id": "LEV-002", "emp_code": "EMP0003", "name": "Chitra Sen", "leave_type": "Sick Leave", "start_date": "2026-07-25", "end_date": "2026-07-25", "days": 1, "reason": "Dental surgery appointment", "status": "PENDING", "applied_on": "2026-07-14"},
+                {"id": "LEV-003", "emp_code": "EMP0005", "name": "Evelyn Reed", "leave_type": "Earned Leave", "start_date": "2026-08-01", "end_date": "2026-08-05", "days": 5, "reason": "Annual summer vacation with family", "status": "APPROVED", "applied_on": "2026-07-02", "actioned_by": "David Miller"}
+            ])
+
+        # 8. Expenses
+        if self["expenses"].count_documents({}) == 0:
+            self["expenses"].insert_many([
+                {"id": "EXP-001", "emp_code": "EMP0002", "name": "Bikram Roy", "category": "Client Entertainment", "amount": 4850.0, "currency": "INR", "date": "2026-07-12", "merchant": "The Oberoi Grand Dining", "description": "Dinner meeting with prospective enterprise client CTO", "status": "PENDING", "submitted_at": "2026-07-13T10:15:00Z"},
+                {"id": "EXP-002", "emp_code": "EMP0005", "name": "Evelyn Reed", "category": "IT Hardware", "amount": 3200.0, "currency": "INR", "date": "2026-07-10", "merchant": "SP Road Micro Systems", "description": "Emergency Cat6 Ethernet patch cables & server rack screws", "status": "APPROVED", "submitted_at": "2026-07-11T09:30:00Z", "actioned_by": "David Miller"},
+                {"id": "EXP-003", "emp_code": "EMP0001", "name": "Asha Rao", "category": "Professional Certification", "amount": 12000.0, "currency": "INR", "date": "2026-06-25", "merchant": "Amazon Web Services", "description": "AWS Certified Solutions Architect Professional exam voucher", "status": "REIMBURSED", "submitted_at": "2026-06-26T14:20:00Z", "actioned_by": "Chitra Sen"},
+                {"id": "EXP-004", "emp_code": "EMP0002", "name": "Bikram Roy", "category": "Travel / Commute", "amount": 650.0, "currency": "INR", "date": "2026-07-14", "merchant": "Uber India", "description": "Airport transfer cab for Bangalore HQ quarterly business review", "status": "PENDING", "submitted_at": "2026-07-14T11:00:00Z"}
+            ])
+
+        # 9. Courses
+        if self["courses"].count_documents({}) == 0:
+            self["courses"].insert_many([
+                {"id": "CRS-01", "title": "Enterprise Information Security & Phishing Defense 2026", "category": "Compliance", "duration_minutes": 45, "mandatory": True, "deadline": "2026-07-31", "description": "Mandatory annual cyber defense, zero-trust protocols, and social engineering simulation.", "enrolled_employees": ["EMP0001", "EMP0002", "EMP0003", "EMP0004", "EMP0005", "EMP0006", "EMP0007", "EMP0008"], "completed_employees": ["EMP0001", "EMP0004", "EMP0007"]},
+                {"id": "CRS-02", "title": "Global Data Privacy, GDPR & CCPA Compliance", "category": "Legal & Risk", "duration_minutes": 30, "mandatory": True, "deadline": "2026-08-15", "description": "Cross-border data transfer rules, subject access requests, and consent management.", "enrolled_employees": ["EMP0001", "EMP0002", "EMP0003", "EMP0004", "EMP0005"], "completed_employees": ["EMP0001", "EMP0003"]},
+                {"id": "CRS-03", "title": "Modern Cloud Architecture & High-Scale Microservices", "category": "Technical", "duration_minutes": 180, "mandatory": False, "deadline": "2026-09-30", "description": "Distributed systems, event streams, MongoDB sharding, and resilience engineering.", "enrolled_employees": ["EMP0001", "EMP0004"], "completed_employees": ["EMP0004"]},
+                {"id": "CRS-04", "title": "Empathetic People Leadership & High-Performance Coaching", "category": "Management", "duration_minutes": 60, "mandatory": False, "deadline": "2026-08-31", "description": "Constructive 1-on-1s, psychological safety, and growth career ladders.", "enrolled_employees": ["EMP0004"], "completed_employees": []}
+            ])
+
+        # 10. Policies
+        if self["policies"].count_documents({}) == 0:
+            self["policies"].insert_many([
+                {"id": "POL-01", "title": "Global Code of Business Conduct & Ethics", "version": "3.4", "updated_at": "2026-01-15", "category": "Corporate Governance", "summary": "Guiding principles on ethical leadership, fair dealing, and transparent governance.", "acknowledged_by": ["EMP0001", "EMP0003", "EMP0004", "EMP0007"]},
+                {"id": "POL-02", "title": "Information Security, BYOD & Remote Work Standard", "version": "4.1", "updated_at": "2026-02-10", "category": "IT & Security", "summary": "Encryption requirements, multi-factor authentication, and safe network access protocols.", "acknowledged_by": ["EMP0001", "EMP0004", "EMP0005"]},
+                {"id": "POL-03", "title": "Anti-Bribery, Gifts & Anti-Corruption Mandate", "version": "2.2", "updated_at": "2026-03-01", "category": "Legal Compliance", "summary": "Zero tolerance for corrupt payments, conflicts of interest, and commercial kickbacks.", "acknowledged_by": ["EMP0001", "EMP0007"]},
+                {"id": "POL-04", "title": "Prevention of Workplace Harassment (POSH) & Inclusivity", "version": "5.0", "updated_at": "2026-01-05", "category": "People Operations", "summary": "Safe, dignified workplace protocols with internal complaints committee contacts.", "acknowledged_by": ["EMP0001", "EMP0002", "EMP0003", "EMP0004", "EMP0006", "EMP0007"]}
+            ])
+
+        # 11. Candidates
+        if self["candidates"].count_documents({}) == 0:
+            self["candidates"].insert_many([
+                {"name": "Priya Nair", "email": "priya.nair@example.com", "phone": "+91-9876543210", "role": "Staff Cloud Architect", "department": "Engineering", "experience_years": 9, "stage": "Screening", "applied_at": "2026-07-08T10:00:00Z", "rating": 4.5, "notes": "Strong distributed systems background, ex-FAANG."},
+                {"name": "Rohan Kulkarni", "email": "rohan.k@example.com", "phone": "+91-9876543211", "role": "DevOps / Reliability Engineer", "department": "Engineering", "experience_years": 6, "stage": "Interview", "applied_at": "2026-07-05T14:30:00Z", "rating": 4.8, "notes": "Cleared architecture round. Technical deep dive scheduled.", "interviews": [{"panel": "David Miller", "scheduled_time": "2026-07-16 11:00 AM IST", "type": "Systems Round"}]},
+                {"name": "Ananya Mehta", "email": "ananya.m@example.com", "phone": "+44-20-7946-0912", "role": "Enterprise Account Executive", "department": "Sales", "experience_years": 5, "stage": "Offer", "applied_at": "2026-07-01T09:15:00Z", "rating": 5.0, "notes": "Offer extended. Candidate reviewing terms.", "offer": {"proposed_ctc": 160000.0, "target_start_date": "2026-08-01", "status": "OFFER_EXTENDED"}},
+                {"name": "Siddharth Rao", "email": "siddharth.r@example.com", "phone": "+91-9876543213", "role": "Senior Compensation Analyst", "department": "Human Resources", "experience_years": 4, "stage": "Sourced", "applied_at": "2026-07-12T16:00:00Z", "rating": 4.0, "notes": "Profile sourced via LinkedIn executive search."},
+                {"name": "Kavita Krishnan", "email": "kavita.k@example.com", "phone": "+91-9876543214", "role": "Staff Cloud Architect", "department": "Engineering", "experience_years": 8, "stage": "Hired", "applied_at": "2026-06-20T11:00:00Z", "rating": 4.9, "notes": "Hired and transitioned into onboarding pipeline."}
+            ])
+
+        # 12. Asset Requests
+        if self["asset_requests"].count_documents({}) == 0:
+            self["asset_requests"].insert_many([
+                {"id": "ARQ-0001", "emp_code": "EMP0002", "emp_name": "Bikram Roy", "department": "Sales", "category": "MONITOR", "model_preference": "Dell UltraSharp 27 4K", "reason": "Dual monitor setup needed for client presentations and contract reviews.", "urgency": "HIGH", "status": "PENDING", "requested_at": "2026-07-13T10:00:00Z"},
+                {"id": "ARQ-0002", "emp_code": "EMP0004", "emp_name": "David Miller", "department": "Engineering", "category": "LAPTOP", "model_preference": "MacBook Pro 16 M3 Max", "reason": "High-memory compute workstation for local container benchmarking.", "urgency": "MEDIUM", "status": "APPROVED", "requested_at": "2026-07-08T09:30:00Z", "actioned_by": "Evelyn Reed", "actioned_at": "2026-07-09T14:00:00Z"}
+            ])
+
+        # 13. Audit Logs
+        if self["audit_logs"].count_documents({}) == 0:
+            self["audit_logs"].insert_many([
+                {"timestamp": "2026-07-14T08:00:00Z", "actor_code": "SYSTEM", "actor_name": "System Engine", "actor_role": "SYSTEM", "action": "INITIALIZE_DATABASE", "target": "attendance_db", "details": {"version": "2.0.0"}, "status": "SUCCESS", "ip_address": "127.0.0.1"},
+                {"timestamp": "2026-07-14T08:30:00Z", "actor_code": "EMP0001", "actor_name": "Asha Rao", "actor_role": "HR Admin", "action": "SEED_ENTERPRISE_DATA", "target": "Workforce_Ecosystem", "details": {"employees": 8, "departments": 6}, "status": "SUCCESS", "ip_address": "127.0.0.1"},
+                {"timestamp": "2026-07-14T09:00:00Z", "actor_code": "EMP0007", "actor_name": "Geeta Sharma", "actor_role": "Auditor", "action": "COMPLIANCE_HEALTH_SCAN", "target": "SOC2_Type_II", "details": {"result": "PASSED"}, "status": "SUCCESS", "ip_address": "127.0.0.1"}
+            ])
 
     def __getitem__(self, name: str) -> MockCollection:
         if name not in self._collections:
@@ -390,6 +636,19 @@ class DatabaseWrapper:
             self._memory_db = MockDatabase()
         return self._memory_db
 
+    @property
+    def name(self):
+        target = self.get_db()
+        return getattr(target, "name", MONGO_DB)
+
+    def list_collection_names(self):
+        target = self.get_db()
+        if hasattr(target, "list_collection_names"):
+            try:
+                return target.list_collection_names()
+            except Exception:
+                pass
+        return list(getattr(target, "_collections", {}).keys())
 
     def __getattr__(self, name):
         target = self.get_db()
@@ -436,6 +695,17 @@ app = FastAPI(
     description="HROne Enterprise HRMS Platform Core Attendance and Analytics Engine",
     lifespan=lifespan
 )
+
+
+@app.middleware("http")
+async def rbac_persona_middleware(request: Request, call_next):
+    # Check for X-Role or X-Persona header
+    header_role = request.headers.get("x-role") or request.headers.get("x-persona")
+    if header_role and header_role in PERSONA_PROFILES:
+        CURRENT_SESSION.clear()
+        CURRENT_SESSION.update(PERSONA_PROFILES[header_role])
+    response = await call_next(request)
+    return response
 
 
 # --------------------------------------------------------------------------- #

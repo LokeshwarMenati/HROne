@@ -35,11 +35,14 @@ const API = {
           <div style="display: flex; align-items: center; gap: 0.75rem;">
             <span style="font-size: 1.3rem;">☁️</span>
             <div>
-              <strong>Cloud Database (MongoDB Atlas) Required:</strong>
-              The Vercel Serverless environment needs a cloud database. Add your <code>MONGO_URI</code> environment variable in Vercel Project Settings to enable live database persistence.
+              <strong>Cloud Preview Mode (In-Memory Engine Active):</strong>
+              Running with comprehensive enterprise demo data. Connect MongoDB Atlas by setting <code>MONGO_URI</code> in Vercel for persistent cloud database storage.
             </div>
           </div>
-          <a href="https://vercel.com/dashboard" target="_blank" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Vercel Settings ↗</a>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <a href="https://vercel.com/dashboard" target="_blank" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Vercel Settings ↗</a>
+            <button class="btn-icon" style="font-size: 0.9rem; padding: 0.25rem;" onclick="document.getElementById('db-status-banner').innerHTML=''" title="Dismiss">✕</button>
+          </div>
         </div>
       `;
     }
@@ -47,9 +50,14 @@ const API = {
 
   async request(url, options = {}) {
     try {
+      const activeRole = (typeof AppState !== 'undefined' && AppState.user && AppState.user.role)
+        ? AppState.user.role
+        : (localStorage.getItem('hrone_role') || 'HR Admin');
+
       const res = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
+          'X-Role': activeRole,
           ...(options.headers || {})
         },
         ...options
@@ -174,8 +182,12 @@ const API = {
   },
 
   switchRole(role) {
+    try {
+      localStorage.setItem('hrone_role', role);
+    } catch (_) {}
     return this.request('/api/session/switch-role', {
       method: 'POST',
+      headers: { 'X-Role': role },
       body: JSON.stringify({ role })
     });
   },

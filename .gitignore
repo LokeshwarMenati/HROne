@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches and runtime data
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments and Secrets (Do not commit as per problem statement)
+.env
+.env.local
+venv/
+.venv/
+env/
+ENV/
+docker-compose.override.yml
+
+# IDE and tool metadata
+.snapshots/
+.qodo/
+.vscode/
+.idea/
+
+# Redundant kits
+candidate_kit/

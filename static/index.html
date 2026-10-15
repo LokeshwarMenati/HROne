@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HROne Enterprise HRMS Platform</title>
+  <meta name="description" content="Enterprise Human Resource Management System for multinational workforce operations, attendance, recruitment, payroll, and compliance.">
+  
+  <!-- Modern Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Chart.js for enterprise visual analytics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- HROne Design System -->
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+  <div class="app-container">
+    <!-- Left Navigation Sidebar -->
+    <aside class="sidebar" id="app-sidebar">
+      <div class="sidebar-header">
+        <a href="#" class="brand-logo" onclick="navigate('dashboard')">
+          <div class="logo-badge">H1</div>
+          <div class="logo-text">HR<span>One</span></div>
+        </a>
+      </div>
+
+      <nav class="sidebar-nav" id="sidebar-nav-container">
+        <!-- Rendered dynamically by role in app.js -->
+        <div class="nav-section-title">Navigation</div>
+        <a class="nav-item active" data-view="dashboard" id="nav-dashboard">
+          <i>🏠</i>
+          <span>Workspace</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-profile-preview">
+          <div class="avatar" id="header-user-avatar">AR</div>
+          <div class="user-info">
+            <span class="user-name" id="header-user-name">Asha Rao</span>
+            <span class="user-role-badge" id="header-user-role">HR Admin</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Wrapper -->
+    <div class="main-wrapper">
+      <!-- Top Sticky Header -->
+      <header class="top-header">
+        <div class="header-left">
+          <div class="breadcrumbs">
+            <span>Enterprise</span>
+            <span>/</span>
+            <span class="current" id="current-breadcrumb">Workspace</span>
+          </div>
+
+          <div class="search-box" style="position: relative;">
+            <i>🔍</i>
+            <input type="text" id="global-search-input" placeholder="Search employees, jobs, assets...">
+            <div id="global-search-results" class="search-dropdown-menu hidden"></div>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <!-- Role Persona Switcher -->
+          <div class="role-switcher-container">
+            <label for="role-switcher">Persona:</label>
+            <select id="role-switcher" class="role-switcher-select">
+              <optgroup label="Core Personas">
+                <option value="HR Admin">HR Admin (Asha Rao)</option>
+                <option value="Employee">Employee (Bikram Roy)</option>
+                <option value="Manager">Manager (David Miller)</option>
+                <option value="Recruiter">Recruiter (Farhan Ali)</option>
+                <option value="Payroll Specialist">Payroll Specialist (Chitra Sen)</option>
+                <option value="IT Asset Admin">IT Asset Admin (Evelyn Reed)</option>
+                <option value="Auditor">Auditor (Geeta Sharma)</option>
+              </optgroup>
+              <optgroup label="Enterprise Roles">
+                <option value="Company Administrator">Company Administrator</option>
+                <option value="Platform Administrator">Platform Administrator</option>
+                <option value="Finance Approver">Finance Approver</option>
+                <option value="Learning Administrator">Learning Administrator</option>
+                <option value="Compliance Officer">Compliance Officer</option>
+                <option value="HR Business Partner">HR Business Partner</option>
+                <option value="Department Head">Department Head</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <!-- Theme Toggle -->
+          <button class="btn-icon" id="theme-toggle-btn" title="Toggle Light/Dark Theme">🌙</button>
+        </div>
+      </header>
+
+      <!-- Dynamic Page Container -->
+      <main class="page-content" id="page-container">
+        <!-- Rendered dynamically by app.js -->
+      </main>
+    </div>
+  </div>
+
+  <!-- Common Reusable Modal -->
+  <div class="modal-backdrop" id="common-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <!-- Modal body content -->
+      </div>
+      <div class="modal-footer" id="modal-footer">
+        <!-- Modal actions -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -54,13 +54,15 @@ const API = {
         ? AppState.user.role
         : (localStorage.getItem('hrone_role') || 'HR Admin');
 
+      const mergedHeaders = {
+        'Content-Type': 'application/json',
+        'X-Role': activeRole,
+        ...(options.headers || {})
+      };
+
       const res = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Role': activeRole,
-          ...(options.headers || {})
-        },
-        ...options
+        ...options,
+        headers: mergedHeaders
       });
 
       if (!res.ok) {

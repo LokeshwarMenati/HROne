@@ -491,9 +491,9 @@ class MockDatabase:
                 {"emp_code": "EMP0003", "name": "Chitra Sen", "email": "chitra@example.com", "department": "Finance", "designation": "Head of Payroll & Compliance", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-02-01", "manager_id": "EMP0004", "salary": 160000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
                 {"emp_code": "EMP0004", "name": "David Miller", "email": "david@example.com", "department": "Engineering", "designation": "Director of Engineering", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-03-10", "manager_id": None, "salary": 280000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
                 {"emp_code": "EMP0005", "name": "Evelyn Reed", "email": "evelyn@example.com", "department": "Operations", "designation": "IT Infrastructure Lead", "shift_start": "22:00", "shift_end": "06:00", "joined_on": "2026-01-15", "manager_id": "EMP0004", "salary": 120000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
-                {"emp_code": "EMP0006", "name": "Farhan Ali", "email": "farhan@example.com", "department": "Human Resources", "designation": "Lead Talent Acquisition", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-04-01", "manager_id": "EMP0001", "salary": 140000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+                {"emp_code": "EMP0006", "name": "Farhan Ali", "email": "farhan@example.com", "department": "Human Resources", "designation": "Lead Talent Acquisition", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-04-01", "manager_id": "EMP0001", "salary": 140000.0, "probation_status": "PROBATION", "location": "Bengaluru, India"},
                 {"emp_code": "EMP0007", "name": "Geeta Sharma", "email": "geeta@example.com", "department": "Product Management", "designation": "Chief Compliance Officer", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-05-01", "manager_id": "EMP0001", "salary": 240000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
-                {"emp_code": "EMP0008", "name": "Harish Verma", "email": "harish@example.com", "department": "Sales", "designation": "Enterprise Account Manager", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-06-15", "manager_id": "EMP0004", "salary": 110000.0, "probation_status": "CONFIRMED", "location": "London, UK"}
+                {"emp_code": "EMP0008", "name": "Harish Verma", "email": "harish@example.com", "department": "Sales", "designation": "Enterprise Account Manager", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-06-15", "manager_id": "EMP0004", "salary": 110000.0, "probation_status": "PROBATION", "location": "London, UK"}
             ]
             self["employees"].insert_many(sample_emps)
 
@@ -597,6 +597,15 @@ class MockDatabase:
                 {"timestamp": "2026-07-14T08:00:00Z", "actor_code": "SYSTEM", "actor_name": "System Engine", "actor_role": "SYSTEM", "action": "INITIALIZE_DATABASE", "target": "attendance_db", "details": {"version": "2.0.0"}, "status": "SUCCESS", "ip_address": "127.0.0.1"},
                 {"timestamp": "2026-07-14T08:30:00Z", "actor_code": "EMP0001", "actor_name": "Asha Rao", "actor_role": "HR Admin", "action": "SEED_ENTERPRISE_DATA", "target": "Workforce_Ecosystem", "details": {"employees": 8, "departments": 6}, "status": "SUCCESS", "ip_address": "127.0.0.1"},
                 {"timestamp": "2026-07-14T09:00:00Z", "actor_code": "EMP0007", "actor_name": "Geeta Sharma", "actor_role": "Auditor", "action": "COMPLIANCE_HEALTH_SCAN", "target": "SOC2_Type_II", "details": {"result": "PASSED"}, "status": "SUCCESS", "ip_address": "127.0.0.1"}
+            ])
+
+        # 14. Tickets
+        if self["tickets"].count_documents({}) == 0:
+            self["tickets"].insert_many([
+                {"ticket_no": "TICK-0001", "emp_code": "EMP0002", "category": "Payroll", "priority": "HIGH", "subject": "Discrepancy in HRA allowance for July", "description": "HRA deduction appears slightly higher than previous cycle.", "status": "IN_PROGRESS", "created_at": now_iso, "resolution": None},
+                {"ticket_no": "TICK-0002", "emp_code": "EMP0004", "category": "IT Support", "priority": "MEDIUM", "subject": "Request for external monitor adapter", "description": "Need USB-C to DisplayPort cable for workstation setup.", "status": "RESOLVED", "created_at": now_iso, "resolution": "Provided via IT desk on 2nd floor."},
+                {"ticket_no": "TICK-0003", "emp_code": "EMP0005", "category": "HR Policy", "priority": "MEDIUM", "subject": "Parental leave policy clarification", "description": "Clarification requested on earned leave rollover.", "status": "OPEN", "created_at": now_iso, "resolution": None},
+                {"ticket_no": "TICK-0004", "emp_code": "EMP0003", "category": "IT Support", "priority": "LOW", "subject": "VPN client certificate renewal", "description": "Certificate expiring at end of month.", "status": "OPEN", "created_at": now_iso, "resolution": None}
             ])
 
     def __getitem__(self, name: str) -> MockCollection:
@@ -2378,34 +2387,6 @@ def check_write_permission():
         )
 
 
-@app.get("/api/session", tags=["Enterprise Platform"])
-def get_session():
-    """Retrieve active session state, role, and authorized permissions."""
-    return CURRENT_SESSION
-
-
-@app.post("/api/session/switch-role", tags=["Enterprise Platform"])
-def switch_role(role: Optional[str] = Query(None), emp_code: Optional[str] = None, body: Optional[Dict[str, Any]] = None):
-    """Switch simulated enterprise persona (Employee, Manager, HR Admin, Recruiter, Payroll, IT Admin, Auditor, Company Admin, Compliance Officer)."""
-    role = role or (body or {}).get("role")
-    if role not in PERSONA_PROFILES:
-        valid_roles = list(PERSONA_PROFILES.keys())
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Invalid role. Must be one of {valid_roles}")
-
-    profile = PERSONA_PROFILES[role]
-    CURRENT_SESSION.clear()
-    CURRENT_SESSION.update(profile)
-
-    if emp_code:
-        emp = db.employees.find_one({"emp_code": emp_code})
-        if emp:
-            CURRENT_SESSION["emp_code"] = emp["emp_code"]
-            CURRENT_SESSION["name"] = emp["name"]
-            CURRENT_SESSION["department"] = emp["department"]
-
-    log_audit_event("ROLE_SWITCH", "SESSION", CURRENT_SESSION["emp_code"], f"Persona switched to {role} ({CURRENT_SESSION['name']})")
-    return {**CURRENT_SESSION, "available_personas": list(PERSONA_PROFILES.keys())}
-
 
 # --------------------------------------------------------------------------- #
 # Leave Management
@@ -3060,9 +3041,9 @@ def seed_enterprise_data():
         {"emp_code": "EMP0003", "name": "Chitra Sen", "email": "chitra@example.com", "department": "Finance", "designation": "Head of Payroll & Compliance", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-02-01", "manager_id": "EMP0004", "salary": 160000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
         {"emp_code": "EMP0004", "name": "David Miller", "email": "david@example.com", "department": "Engineering", "designation": "Director of Engineering", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-03-10", "manager_id": None, "salary": 280000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
         {"emp_code": "EMP0005", "name": "Evelyn Reed", "email": "evelyn@example.com", "department": "Operations", "designation": "IT Infrastructure Lead", "shift_start": "22:00", "shift_end": "06:00", "joined_on": "2026-01-15", "manager_id": "EMP0004", "salary": 120000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
-        {"emp_code": "EMP0006", "name": "Farhan Ali", "email": "farhan@example.com", "department": "Human Resources", "designation": "Lead Talent Acquisition", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-04-01", "manager_id": "EMP0001", "salary": 140000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
+        {"emp_code": "EMP0006", "name": "Farhan Ali", "email": "farhan@example.com", "department": "Human Resources", "designation": "Lead Talent Acquisition", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-04-01", "manager_id": "EMP0001", "salary": 140000.0, "probation_status": "PROBATION", "location": "Bengaluru, India"},
         {"emp_code": "EMP0007", "name": "Geeta Sharma", "email": "geeta@example.com", "department": "Product Management", "designation": "Chief Compliance Officer", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-05-01", "manager_id": "EMP0001", "salary": 240000.0, "probation_status": "CONFIRMED", "location": "Bengaluru, India"},
-        {"emp_code": "EMP0008", "name": "Harish Verma", "email": "harish@example.com", "department": "Sales", "designation": "Enterprise Account Manager", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-06-15", "manager_id": "EMP0004", "salary": 110000.0, "probation_status": "CONFIRMED", "location": "London, UK"}
+        {"emp_code": "EMP0008", "name": "Harish Verma", "email": "harish@example.com", "department": "Sales", "designation": "Enterprise Account Manager", "shift_start": "09:30", "shift_end": "18:30", "joined_on": "2026-06-15", "manager_id": "EMP0004", "salary": 110000.0, "probation_status": "PROBATION", "location": "London, UK"}
     ]
 
     for emp in sample_employees:
@@ -3098,7 +3079,9 @@ def seed_enterprise_data():
     # Tickets
     sample_tickets = [
         {"ticket_no": "TICK-0001", "emp_code": "EMP0002", "category": "Payroll", "priority": "HIGH", "subject": "Discrepancy in HRA allowance for July", "description": "HRA deduction appears slightly higher than previous cycle.", "status": "IN_PROGRESS", "created_at": datetime.now(timezone.utc).isoformat(), "resolution": None},
-        {"ticket_no": "TICK-0002", "emp_code": "EMP0004", "category": "IT Support", "priority": "MEDIUM", "subject": "Request for external monitor adapter", "description": "Need USB-C to DisplayPort cable for workstation setup.", "status": "RESOLVED", "created_at": datetime.now(timezone.utc).isoformat(), "resolution": "Provided via IT desk on 2nd floor."}
+        {"ticket_no": "TICK-0002", "emp_code": "EMP0004", "category": "IT Support", "priority": "MEDIUM", "subject": "Request for external monitor adapter", "description": "Need USB-C to DisplayPort cable for workstation setup.", "status": "RESOLVED", "created_at": datetime.now(timezone.utc).isoformat(), "resolution": "Provided via IT desk on 2nd floor."},
+        {"ticket_no": "TICK-0003", "emp_code": "EMP0005", "category": "HR Policy", "priority": "MEDIUM", "subject": "Parental leave policy clarification", "description": "Clarification requested on earned leave rollover.", "status": "OPEN", "created_at": datetime.now(timezone.utc).isoformat(), "resolution": None},
+        {"ticket_no": "TICK-0004", "emp_code": "EMP0003", "category": "IT Support", "priority": "LOW", "subject": "VPN client certificate renewal", "description": "Certificate expiring at end of month.", "status": "OPEN", "created_at": datetime.now(timezone.utc).isoformat(), "resolution": None}
     ]
     db.tickets.delete_many({})
     db.tickets.insert_many(sample_tickets)
@@ -3402,7 +3385,8 @@ def export_module_csv(module: str = Path(..., pattern=r"^(employees|attendance|p
 # Enterprise Session & Role Switching API
 # --------------------------------------------------------------------------- #
 class RoleSwitchIn(BaseModel):
-    role: str
+    role: Optional[str] = None
+    emp_code: Optional[str] = None
 
 
 @app.get("/api/session", tags=["Enterprise RBAC"])
@@ -3415,17 +3399,44 @@ def get_current_session():
 
 
 @app.post("/api/session/switch-role", tags=["Enterprise RBAC"])
-def switch_active_role(body: RoleSwitchIn):
+async def switch_active_role(
+    request: Request,
+    body: Optional[RoleSwitchIn] = None,
+    role: Optional[str] = Query(None),
+    emp_code: Optional[str] = Query(None)
+):
     """Dynamically transitions application context to a selected persona."""
-    if body.role not in PERSONA_PROFILES:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown persona role '{body.role}'. Supported roles: {list(PERSONA_PROFILES.keys())}")
+    target_role = (body.role if body and body.role else None) or role
+    target_emp = (body.emp_code if body and body.emp_code else None) or emp_code
+
+    if not target_role:
+        try:
+            body_json = await request.json()
+            if isinstance(body_json, dict):
+                target_role = body_json.get("role") or (body_json.get("body", {}) if isinstance(body_json.get("body"), dict) else {}).get("role")
+                target_emp = target_emp or body_json.get("emp_code")
+        except Exception:
+            pass
+
+    if not target_role:
+        target_role = request.headers.get("X-Role")
+
+    if not target_role or target_role not in PERSONA_PROFILES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown persona role '{target_role}'. Supported roles: {list(PERSONA_PROFILES.keys())}")
 
     prev_role = CURRENT_SESSION.get("role")
-    new_profile = PERSONA_PROFILES[body.role]
+    new_profile = PERSONA_PROFILES[target_role]
     CURRENT_SESSION.clear()
     CURRENT_SESSION.update(new_profile)
 
-    log_audit_event("SWITCH_ROLE", body.role, {"previous_role": prev_role, "new_role": body.role, "emp_code": new_profile["emp_code"]})
+    if target_emp:
+        emp = db.employees.find_one({"emp_code": target_emp})
+        if emp:
+            CURRENT_SESSION["emp_code"] = emp.get("emp_code", target_emp)
+            CURRENT_SESSION["name"] = emp.get("name", CURRENT_SESSION["name"])
+            CURRENT_SESSION["department"] = emp.get("department", CURRENT_SESSION["department"])
+
+    log_audit_event("SWITCH_ROLE", target_role, {"previous_role": prev_role, "new_role": target_role, "emp_code": CURRENT_SESSION["emp_code"]})
     return {
         **CURRENT_SESSION,
         "available_personas": list(PERSONA_PROFILES.keys())

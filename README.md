@@ -11,7 +11,6 @@ HROne is an enterprise-grade Human Resource Management System built with **FastA
 
 > **Note on Cloud Database:** For full live database interactivity in Vercel, set `MONGO_URI` (MongoDB Atlas connection string) in your Vercel Project Environment Variables.
 
-
 ---
 
 ## 1. Quick Start
